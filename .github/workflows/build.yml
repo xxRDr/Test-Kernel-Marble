@@ -124,8 +124,8 @@ jobs:
           set +e
           mkdir -p toolchains/${{ inputs.clang_version }}
           cd toolchains
-          URL="https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/${{ inputs.clang_version }}.tar.xz"
-          TARBALL="${{ inputs.clang_version }}.tar.xz"
+          URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android16-qpr2-release/${{ inputs.clang_version }}.tar.gz"
+          TARBALL="${{ inputs.clang_version }}.tar.gz"
           ok=0
           for i in $(seq 1 8); do
             echo "==> Downloading clang (attempt $i/8)..."
