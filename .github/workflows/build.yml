@@ -60,7 +60,7 @@ on:
 
 
 jobs:
-  Kernel_CI:
+  Build_Kernel_Marble:
     env:
         GH_TOKEN: ${{ github.token }}
         SOC: marble
