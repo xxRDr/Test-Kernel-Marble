@@ -7,9 +7,8 @@ on:
         description: Type the clang version of ur kernel
         required: true
         type: choice
-        default: LLVM-22.1.8-Linux-X64
+        default: clang-r574158
         options:
-          - LLVM-22.1.8-Linux-X64
           - clang-r547379
           - clang-r563880
           - clang-r563880c
