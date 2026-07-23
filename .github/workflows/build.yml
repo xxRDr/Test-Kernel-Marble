@@ -77,7 +77,7 @@ jobs:
     env:
         GH_TOKEN: ${{ github.token }}
         SOC: marble
-        CCACHE_KEY: ccache-ecsv3-marble-parrot
+        CCACHE_KEY: ccache-ecsv3-marble
         # Public link of your Telegram group (shown as "JOIN" button in the push).
         TG_GROUP_URL: ""
     runs-on: ubuntu-latest
