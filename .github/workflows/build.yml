@@ -3,18 +3,6 @@ name: Compile Kernel - POCO F5 (Marble)
 on:
   workflow_dispatch:
     inputs:
-      clang_version:
-        description: Type the clang version of ur kernel
-        required: true
-        type: choice
-        default: clang-r574158
-        options:
-          - clang-r547379
-          - clang-r563880
-          - clang-r563880c
-          - clang-r574158
-          - clang-stable
-
       kernel_source:
         description: "Kernel source repo URL for marble (Melt Kernel). Paste any git URL here to override the default."
         required: true
@@ -116,36 +104,13 @@ jobs:
           # this marble (SM7475) Melt Kernel
           git clone --depth=1 -b ${{ inputs.kernel_branch }} ${{ inputs.kernel_source }} ${SOC}
 
-      - name: Download Clang
+      - name: Download LLVM 22.1.8
         run: |
-          # NOTE: no errexit here — we handle every failure manually so the
-          # retry loop actually loops (googlesource's archive endpoint 5xx's often).
-          set +e
-          mkdir -p toolchains/${{ inputs.clang_version }}
+          mkdir -p toolchains
           cd toolchains
-          URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android16-qpr2-release/${{ inputs.clang_version }}.tar.gz"
-          TARBALL="${{ inputs.clang_version }}.tar.gz"
-          ok=0
-          for i in $(seq 1 8); do
-            echo "==> Downloading clang (attempt $i/8)..."
-            rm -f "$TARBALL"
-            curl -L --fail --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 30 -o "$TARBALL" "$URL"
-            rc=$?
-            sz=$(stat -c%s "$TARBALL" 2>/dev/null || echo 0)
-            if [ "$rc" -eq 0 ] && gzip -t "$TARBALL" 2>/dev/null; then
-              echo "==> Valid tarball (${sz} bytes), extracting..."
-              tar -xf "$TARBALL" -C "${{ inputs.clang_version }}" && { ok=1; break; }
-              echo "!! extraction failed, will retry"
-            else
-              echo "!! attempt $i failed (curl rc=$rc, size=${sz} bytes) — googlesource 5xx/hiccup"
-            fi
-            echo "   sleeping 20s before next attempt..."
-            sleep 20
-          done
-          if [ "$ok" != 1 ]; then
-            echo "::error::clang download failed after 8 attempts (googlesource likely having an outage; just re-run the workflow)"
-            exit 1
-          fi
+          wget -q https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-Linux-X64.tar.xz
+          mkdir llvm-22.1.8
+          tar -xf LLVM-22.1.8-Linux-X64.tar.xz -C llvm-22.1.8 --strip-components=1
 
       # ---- ccache-ECS (cctv18 style layered ccache) ----
       - name: Configure ccache dir and key
@@ -174,7 +139,7 @@ jobs:
 
       - name: Compile Kernel
         run: |
-          CLANG_ROOT="${GITHUB_WORKSPACE}/toolchains/${{ inputs.clang_version }}/bin"
+          CLANG_ROOT="${GITHUB_WORKSPACE}/toolchains/llvm-22.1.8/bin"
           export PATH="${CLANG_ROOT}:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
@@ -353,8 +318,9 @@ jobs:
            | 🔧 SuSFS Version | ${susfs_checkbox} 
            | ⚙️ BBG Patch | ${bbg_checkbox} 
            | ⚙️ Re-Kernel | ${rekernel_checkbox}
-           | 🔨 Compiler | LLVM +pgo, +bolt, +lto, +mlgo, based on r563880c) clang version 21.0.0 |
+           | 🔨 Compiler | LLVM/Clang 22.1.8 Official (llvm-project release) |
 
            ---
           " "${ZIP_FILE}" Image
+
           
