@@ -31,9 +31,9 @@ on:
         description: "kernel"
         required: false
         type: choice
-        default: Rebuild
+        default: Melt-Rebase
         options:
-          - Rebuild
+          - Melt-Rebase
           
       susfs:
         description: "Add susfs support"
@@ -254,7 +254,7 @@ jobs:
           make O=out marble_defconfig
 
           # ccache must be injected via make command-line CC (LLVM=1 overrides the env CC otherwise)
-          make -j2 O=out CC="ccache ${CLANG_ROOT}/clang" HOSTCC="ccache ${CLANG_ROOT}/clang" Image
+          make -j$(nproc) O=out CC="ccache ${CLANG_ROOT}/clang" HOSTCC="ccache ${CLANG_ROOT}/clang" Image
 
           echo "ccache status after build:"
           ccache -s
@@ -303,12 +303,12 @@ jobs:
             rekernel_checkbox="Unsupported"
           fi
 
-          gh release create "$REL_NAME" --title "$REL_NAME" --notes "# Kernel Rebuild for POCO F5 (marble)
+          gh release create "$REL_NAME" --title "$REL_NAME" --notes "# Kernel Melt Rebase for POCO F5 (marble)
 
            | | |
            |:---|:---|
            | 📱 Device | POCO F5 (marble) • Redmi Note 12 Turbo (marble) |
-           | 🟠 ROM Support | Official AOSP Only |
+           | 🟠 ROM Support | HyperOS 3.0 Only |
            | 🖥️ Kernel Name | ${KERNEL_NAME}
            | 🧬 Kernel Base | android12-5.10 |
            | 🛠️ Build Scope | ZIP, IMG |
