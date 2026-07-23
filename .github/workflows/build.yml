@@ -1,0 +1,361 @@
+name: Compile Kernel - POCO F5 (Marble)
+
+on:
+  workflow_dispatch:
+    inputs:
+      clang_version:
+        description: Type the clang version of ur kernel
+        required: true
+        type: choice
+        default: clang-r563880c
+        options:
+          - clang-3289846
+          - clang-r547379
+          - clang-r563880
+          - clang-r563880c
+          - clang-r574158
+          - clang-stable
+
+      kernel_source:
+        description: "Kernel source repo URL for marble (Melt Kernel). Paste any git URL here to override the default."
+        required: true
+        type: string
+        default: "https://github.com/yudharn/android_kernel_xiaomi_marble"
+
+      kernel_branch:
+        description: "Branch on kernel_source above"
+        required: true
+        type: string
+        default: "melt-Guxin12-A"
+
+      ksu_type:
+        description: "KernelSU Version"
+        required: true
+        type: choice
+        options:
+          - None
+          - Official-KernelSU
+          - KernelSU-Next
+          - KowSU
+          - ReSukiSU
+          - SukiSUUltra
+
+      custom_name:
+        description: "kernel"
+        required: false
+        type: choice
+        default: Rebuild
+        options:
+          - Rebuild
+          
+      susfs:
+        description: "Add susfs support"
+        required: true
+        type: boolean
+        default: false
+
+      BBG:
+        description: "Add BBG support"
+        required: true
+        type: boolean
+
+      rekernel:
+        description: "Add Re-Kernel support"
+        required: true
+        type: boolean
+        default: false
+
+      ccache_update:
+        description: "Refresh ccache (overwrite the repo cache with this build's ccache; enable when u changed configs/source or need a clean cache)"
+        required: true
+        type: boolean
+        default: false
+
+
+jobs:
+  Kernel_CI:
+    env:
+        GH_TOKEN: ${{ github.token }}
+        SOC: marble
+        CCACHE_KEY: ccache-ecsv3-marble-parrot
+        # Public link of your Telegram group (shown as "JOIN" button in the push).
+        TG_GROUP_URL: ""
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+      checks: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SWAP
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 16
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+          bc bison flex \
+          libssl-dev \
+          libelf-dev \
+          libdw-dev \
+          build-essential \
+          lz4 \
+          git \
+          python3 \
+          curl \
+          dwarves \
+          cpio \
+          ccache \
+          zstd \
+          gcc-aarch64-linux-gnu
+
+      - name: Clone Kernel Source
+        run: |
+          # this marble (SM7475) Melt Kernel
+          git clone --depth=1 -b ${{ inputs.kernel_branch }} ${{ inputs.kernel_source }} ${SOC}
+
+      - name: Download AOSP Clang
+        run: |
+          # NOTE: no errexit here — we handle every failure manually so the
+          # retry loop actually loops (googlesource's archive endpoint 5xx's often).
+          set +e
+          mkdir -p toolchains/${{ inputs.clang_version }}
+          cd toolchains
+          URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android16-qpr2-release/${{ inputs.clang_version }}.tar.gz"
+          TARBALL="${{ inputs.clang_version }}.tar.gz"
+          ok=0
+          for i in $(seq 1 8); do
+            echo "==> Downloading clang (attempt $i/8)..."
+            rm -f "$TARBALL"
+            curl -L --fail --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 30 -o "$TARBALL" "$URL"
+            rc=$?
+            sz=$(stat -c%s "$TARBALL" 2>/dev/null || echo 0)
+            if [ "$rc" -eq 0 ] && gzip -t "$TARBALL" 2>/dev/null; then
+              echo "==> Valid tarball (${sz} bytes), extracting..."
+              tar -xf "$TARBALL" -C "${{ inputs.clang_version }}" && { ok=1; break; }
+              echo "!! extraction failed, will retry"
+            else
+              echo "!! attempt $i failed (curl rc=$rc, size=${sz} bytes) — googlesource 5xx/hiccup"
+            fi
+            echo "   sleeping 20s before next attempt..."
+            sleep 20
+          done
+          if [ "$ok" != 1 ]; then
+            echo "::error::clang download failed after 8 attempts (googlesource likely having an outage; just re-run the workflow)"
+            exit 1
+          fi
+
+      # ---- ccache-ECS (cctv18 style layered ccache) ----
+      - name: Configure ccache dir and key
+        run: |
+          echo "CCACHE_DIR=$HOME/.ccache_marble" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=3G" >> $GITHUB_ENV
+          CCACHE_REAL_KEY=${CCACHE_KEY}-none
+          echo "CCACHE_REAL_KEY=$CCACHE_REAL_KEY" >> $GITHUB_ENV
+
+      - name: Purge old ccache (on refresh)
+        if: ${{ inputs.ccache_update }}
+        continue-on-error: true
+        run: |
+          echo "Deleting old repo ccache to force a fresh save..."
+          gh cache delete "${CCACHE_REAL_KEY}-${{ runner.os }}-${{ inputs.kernel_branch }}" -R ${{ github.repository }} || echo "No old ccache to delete"
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        id: ccache-restore
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-${{ inputs.kernel_branch }}
+          restore-keys: |
+            ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-
+            ${{ env.CCACHE_REAL_KEY }}-
+
+      - name: Compile Kernel
+        run: |
+          CLANG_ROOT="${GITHUB_WORKSPACE}/toolchains/${{ inputs.clang_version }}/bin"
+          export PATH="${CLANG_ROOT}:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          export CC="${CLANG_ROOT}/clang"
+          export CXX="${CLANG_ROOT}/clang++"
+          export HOSTCC="${CLANG_ROOT}/clang"
+          export HOSTCXX="${CLANG_ROOT}/clang++"
+          export LD="${CLANG_ROOT}/ld.lld"
+          export AR="${CLANG_ROOT}/llvm-ar"
+          export NM="${CLANG_ROOT}/llvm-nm"
+          export OBJCOPY="${CLANG_ROOT}/llvm-objcopy"
+          export OBJDUMP="${CLANG_ROOT}/llvm-objdump"
+          export STRIP="${CLANG_ROOT}/llvm-strip"
+
+          # ccache-ECS tuning: normalize paths/timestamps so cache hits across runs
+          export CCACHE_COMPILERCHECK="none"
+          export CCACHE_BASEDIR="${GITHUB_WORKSPACE}"
+          export CCACHE_NOHASHDIR="true"
+          export CCACHE_NOHARDLINK="true"
+          mkdir -p "${CCACHE_DIR}"
+          echo "sloppiness = file_stat_matches,include_file_ctime,include_file_mtime,pch_defines,file_macro,time_macros" >> "${CCACHE_DIR}/ccache.conf"
+          ccache -M "${CCACHE_MAXSIZE}"
+          ccache -o compression=true
+          echo "ccache status before build:"
+          ccache -s
+
+          if [[ -n "${{ inputs.custom_name }}" ]]; then
+            KERNEL_NAME="${{ inputs.custom_name }}"
+          else
+            KERNEL_NAME="${{ inputs.ksu_type }}"
+          fi
+
+          echo "KERNEL_NAME=${KERNEL_NAME}" >> $GITHUB_ENV
+
+          cd ${SOC}
+
+          case "${{ inputs.ksu_type }}" in
+
+            "None")
+              ;;
+
+            "Official-KernelSU")
+              curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
+              ;;
+
+            "KowSU")
+               curl -LSs "https://raw.githubusercontent.com/KOWX712/KernelSU/main/kernel/setup.sh" | bash -s master
+              ;;
+
+            "KernelSU-Next")
+              if [[ "${{ inputs.susfs }}" == true ]]; then
+                curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
+              else
+                curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s dev
+              fi
+              ;;
+
+            "ReSukiSU")
+              curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+              ;;
+
+            "SukiSUUltra")
+              curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s builtin
+              ;;
+          esac
+
+          if [[ "${{ inputs.susfs }}" == true ]]; then
+            # Cloning by branch name (no tag/commit pin) always checks out the
+            # branch tip, i.e. the latest commit, at the time the job runs.
+            # --depth=1 just makes that shallow/fast; we still capture the SHA
+            # so the exact SUSFS commit used is visible in logs/release notes.
+            git clone --depth=1 -b gki-android12-5.10 https://gitlab.com/simonpunk/susfs4ksu.git susfs
+            cd susfs
+            SUSFS_COMMIT=$(git rev-parse --short HEAD)
+            echo "SUSFS_COMMIT=${SUSFS_COMMIT}" >> $GITHUB_ENV
+            echo "==> SUSFS: using latest commit ${SUSFS_COMMIT} on branch gki-android12-5.10"
+            cp ./kernel_patches/50_add_susfs_in_gki-android12-5.10.patch ..
+            cp ./kernel_patches/fs/* ../fs/
+            cp ./kernel_patches/include/linux/* ../include/linux/
+            cd ..
+            patch -p1 < 50_add_susfs_in_gki-android12-5.10.patch
+            echo "CONFIG_KSU_SUSFS=y" >> arch/arm64/configs/marble_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> arch/arm64/configs/marble_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> arch/arm64/configs/marble_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> arch/arm64/configs/marble_defconfig
+            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> arch/arm64/configs/marble_defconfig
+            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> arch/arm64/configs/marble_defconfig
+            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> arch/arm64/configs/marble_defconfig
+            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> arch/arm64/configs/marble_defconfig
+            echo "CONFIG_KSU_SUSFS_SUS_MAP=y" >> arch/arm64/configs/marble_defconfig
+          fi
+
+          if [[ "${{ inputs.BBG }}" == true ]]; then
+            wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
+            echo "CONFIG_BBG=y" >> arch/arm64/configs/marble_defconfig
+            sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig
+          fi
+
+          if [[ "${{ inputs.rekernel }}" == true ]]; then
+            git clone --depth=1 https://github.com/Sakion-Team/Re-Kernel.git rekernel-src
+            bash rekernel-src/Integrate/patches.sh
+            echo "CONFIG_REKERNEL=y" >> arch/arm64/configs/marble_defconfig
+            echo "CONFIG_REKERNEL_NETWORK=y" >> arch/arm64/configs/marble_defconfig
+          fi
+
+          echo "-${KERNEL_NAME}-${{ github.actor }}" > .scmversion
+
+          echo "CONFIG_TMPFS_XATTR=y" >> arch/arm64/configs/marble_defconfig
+
+          make O=out marble_defconfig
+
+          # ccache must be injected via make command-line CC (LLVM=1 overrides the env CC otherwise)
+          make -j2 O=out CC="ccache ${CLANG_ROOT}/clang" HOSTCC="ccache ${CLANG_ROOT}/clang" Image
+
+          echo "ccache status after build:"
+          ccache -s
+
+      - name: Save ccache
+        if: ${{ always() && steps.ccache-restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-${{ inputs.kernel_branch }}
+
+      - name: Make AnyKernel3
+        run: |
+          ZIP_NAME="${KERNEL_NAME}_$(date -u +"%Y%m%d_%H%M")"
+          git clone https://github.com/Kernel-SU/AnyKernel3.git
+
+          cp ${SOC}/out/arch/arm64/boot/Image AnyKernel3/Image
+          cp ${SOC}/out/arch/arm64/boot/Image ./Image
+          cd AnyKernel3
+
+          zip -r9 ../"${ZIP_NAME}.zip" * -x .git
+
+      - name: Create GitHub Release
+        run: |
+          BUILD_TIME=$(date -u +"%Y%m%d_%H%M")
+          REL_NAME="${KERNEL_NAME}-${BUILD_TIME}"
+          echo "REL_NAME=${REL_NAME}" >> $GITHUB_ENV
+          cd ${GITHUB_WORKSPACE}
+          ZIP_FILE=$(ls *.zip)
+
+          if [[ "${{ inputs.susfs }}" == true ]]; then
+            susfs_checkbox="Supported (susfs4ksu@${SUSFS_COMMIT})"
+          else
+            susfs_checkbox="Unsupported"
+          fi
+
+          if [[ "${{ inputs.BBG }}" == true ]]; then
+            bbg_checkbox="Supported"
+          else
+            bbg_checkbox="Unsupported"
+          fi
+
+          if [[ "${{ inputs.rekernel }}" == true ]]; then
+            rekernel_checkbox="Supported"
+          else
+            rekernel_checkbox="Unsupported"
+          fi
+
+          gh release create "$REL_NAME" --title "$REL_NAME" --notes "# Kernel Rebuild for POCO F5 (marble)
+
+           | | |
+           |:---|:---|
+           | 📱 Device | POCO F5 (marble) • Redmi Note 12 Turbo (marble) |
+           | 🟠 ROM Support | Official AOSP Only |
+           | 🖥️ Kernel Name | ${KERNEL_NAME}
+           | 🧬 Kernel Base | android12-5.10 |
+           | 🛠️ Build Scope | ZIP, IMG |
+           | 📦 Source | ${{ inputs.kernel_source }} |
+           | ⚔️ Kernel branch | ${{ inputs.kernel_branch }}
+           | 💻 KSU Manager type | ${{ inputs.ksu_type }} 
+           | 🔧 SuSFS Version | ${susfs_checkbox} 
+           | ⚙️ BBG Patch | ${bbg_checkbox} 
+           | ⚙️ Re-Kernel | ${rekernel_checkbox}
+           | 🔨 Compiler | LLVM +pgo, +bolt, +lto, +mlgo, based on r563880c) clang version 21.0.0 |
+
+           ---
+          " "${ZIP_FILE}" Image
+          
