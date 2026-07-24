@@ -1,6 +1,6 @@
 <div align="center">
 
-#   ✧ Kernel Melt Rebase Marble ✧
+#   ✧ Kernel Melt Rebase ✧
 
 [![Build](https://img.shields.io/badge/GitHub_Actions-CI_Builder-2088FF?logo=githubactions&logoColor=white)](https://github.com/xxRDr/Build-Kernel-Melt-Marble/actions)
 [![KernelSU](https://img.shields.io/badge/KernelSU-Supported-4CAF50?logo=linux&logoColor=white)](https://github.com/tiann/KernelSU)
