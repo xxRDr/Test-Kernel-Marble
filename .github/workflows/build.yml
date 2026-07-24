@@ -313,7 +313,7 @@ jobs:
            | 🟠 ROM Support | HyperOS 3.0 Only |
            | 🖥️ Kernel Name | ${KERNEL_NAME}
            | 🧬 Kernel Base | android12-5.10 |
-           | 🛠️ Build Scope | ZIP, IMG |
+           | 🛠️ Build Scope | ZIP |
            | 📦 Source | ${{ inputs.kernel_source }} |
            | ⚔️ Kernel branch | ${{ inputs.kernel_branch }}
            | 💻 KSU Manager type | ${{ inputs.ksu_type }} 
@@ -323,6 +323,6 @@ jobs:
            | 🔨 Compiler | LLVM/Clang 22.1.8 Official (llvm-project release) |
 
            ---
-          " "${ZIP_FILE}" Image
+          " "${ZIP_FILE}"
 
           
